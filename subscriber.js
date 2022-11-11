@@ -2,11 +2,11 @@ var mqtt = require('mqtt')
 require('dotenv').config();
 
 var options = {
-    host: process.env.host,
-    port: process.env.port,
-    protocol: process.env.protocol,
-    username: process.env.username,
-    password: process.env.password
+    host: '9ded35a8cfb84084be0c9fdda79d39a6.s2.eu.hivemq.cloud',
+    port: 8883,
+    protocol: 'mqtts',
+    username: 'crusteamqtt',
+    password: 'crusteamqtt2022'
 }
 
 // initialize the MQTT client
@@ -27,4 +27,4 @@ client.on('message', function (topic, message) {
 });
 
 // subscribe to topic 'my/test/topic'
-client.subscribe('my/test/topic');
+client.subscribe('/topic');
