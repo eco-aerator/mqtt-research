@@ -17,7 +17,7 @@ PZEM004Tv30 pzem(pzemSWSerial);
 float pzem_voltage, pzem_current, pzem_power, pzem_energy, pzem_frequency, pzem_pf; 
 
 // Kode untuk relay 
-int relayPin = 8; //set pin 8 for relay output
+int relayPin = 23; //set pin 8 for relay output
 
 // Kode untuk mendefine ESP32 dengan WiFi dan MQTT API
 #include <WiFi.h>
