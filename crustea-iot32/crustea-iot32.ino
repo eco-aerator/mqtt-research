@@ -1,18 +1,56 @@
 // Kode untuk mendefine sensor PZEM 004T 
 #include <PZEM004Tv30.h>
-#include <SoftwareSerial.h>
 
-#if defined(ESP32)
-    #error "Software Serial is not supported on the ESP32"
-#endif
 
-#if !defined(PZEM_RX_PIN) && !defined(PZEM_TX_PIN)
+#if !defined(PZEM_RX_PIN) && !defined(PZEM_TX_PIN) && !defined(PZEM_SERIAL)
+#define PZEM_SERIAL Serial2
 #define PZEM_RX_PIN 16
 #define PZEM_TX_PIN 17
+
 #endif
 
+//#if !defined(PZEM_SERIAL)
+//#define PZEM_SERIAL Serial2
+//#endif
+
+/* Hardware Serial2 is only available on certain boards.
+ * For example the Arduino MEGA 2560
+*/
+#if defined(USE_SOFTWARE_SERIAL)
+#include <SoftwareSerial.h>
+/*************************
+ *  Use SoftwareSerial for communication
+ * ---------------------
+ * 
+ * The ESP32 platform does not support the SoftwareSerial as of now 
+ * Here we initialize the PZEM on SoftwareSerial with RX/TX pins PZEM_RX_PIN and PZEM_TX_PIN
+ */
 SoftwareSerial pzemSWSerial(PZEM_RX_PIN, PZEM_TX_PIN);
 PZEM004Tv30 pzem(pzemSWSerial);
+
+#elif defined(ESP32)
+/*************************
+ *  ESP32 initialization
+ * ---------------------
+ * 
+ * The ESP32 HW Serial interface can be routed to any GPIO pin 
+ * Here we initialize the PZEM on PZEM_SERIAL with RX/TX pins PZEM_RX_PIN and PZEM_TX_PIN
+ */
+PZEM004Tv30 pzem(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN);
+
+#else
+/*************************
+ *  Arduino/ESP8266 initialization
+ * ---------------------
+ * 
+ * Not all Arduino boards come with multiple HW Serial ports.
+ * Serial2 is for example available on the Arduino MEGA 2560 but not Arduino Uno!
+ * The ESP32 HW Serial interface can be routed to any GPIO pin 
+ * Here we initialize the PZEM on PZEM_SERIAL with default pins
+ */
+PZEM004Tv30 pzem(PZEM_SERIAL);
+
+#endif
 
 float pzem_voltage, pzem_current, pzem_power, pzem_energy, pzem_frequency, pzem_pf; 
 
@@ -118,20 +156,6 @@ void loop() {
   
   // memantau sensor PZEM
   pzemMonitor();
-
-//  if(dataSensor == sekian){
-//    // relay nyala, aerator menyala
-//    powerSystem(0);
-//  }else{
-//    // relay mati, aerator mati
-//    powerSystem(1);
-//  }
-  
-  
-
-  
-
-
   
 
 }
