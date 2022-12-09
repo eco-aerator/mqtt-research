@@ -1,6 +1,8 @@
-// Kode untuk mendefine sensor PZEM 004T 
+#include <ArduinoJson.h>
+#include <PubSubClient.h>
+#include <WiFi.h>
+#include <ThingsBoard.h>
 #include <PZEM004Tv30.h>
-
 
 #if !defined(PZEM_RX_PIN) && !defined(PZEM_TX_PIN) && !defined(PZEM_SERIAL)
 #define PZEM_SERIAL Serial2
@@ -9,69 +11,45 @@
 
 #endif
 
-
-/* Hardware Serial2 is only available on certain boards.
- * For example the Arduino MEGA 2560
-*/
 #if defined(USE_SOFTWARE_SERIAL)
-//#include <SoftwareSerial.h>
-/*************************
- *  Use SoftwareSerial for communication
- * ---------------------
- * 
- * The ESP32 platform does not support the SoftwareSerial as of now 
- * Here we initialize the PZEM on SoftwareSerial with RX/TX pins PZEM_RX_PIN and PZEM_TX_PIN
- */
 //SoftwareSerial pzemSWSerial(PZEM_RX_PIN, PZEM_TX_PIN);
 //PZEM004Tv30 pzem(pzemSWSerial);
 
 #elif defined(ESP32)
-/*************************
- *  ESP32 initialization
- * ---------------------
- * 
- * The ESP32 HW Serial interface can be routed to any GPIO pin 
- * Here we initialize the PZEM on PZEM_SERIAL with RX/TX pins PZEM_RX_PIN and PZEM_TX_PIN
- */
 PZEM004Tv30 pzem(PZEM_SERIAL, PZEM_RX_PIN, PZEM_TX_PIN);
-
 #else
-/*************************
- *  Arduino/ESP8266 initialization
- * ---------------------
- * 
- * Not all Arduino boards come with multiple HW Serial ports.
- * Serial2 is for example available on the Arduino MEGA 2560 but not Arduino Uno!
- * The ESP32 HW Serial interface can be routed to any GPIO pin 
- * Here we initialize the PZEM on PZEM_SERIAL with default pins
- */
 PZEM004Tv30 pzem(PZEM_SERIAL);
 
 #endif
 
 float pzem_voltage, pzem_current, pzem_power, pzem_energy, pzem_frequency, pzem_pf; 
 
-// Kode untuk relay 
-int relayPin = 23; //set pin 8 for relay output
 
-// Kode untuk mendefine ESP32 dengan WiFi dan MQTT API
-#include <WiFi.h>
-#include <PubSubClient.h>
-
-#define WIFI_SSID "ipongggggg"
+#define WIFI_AP "ipongggggg"
 #define WIFI_PASSWORD "12345678"
 
-// thingsboard
-
-#include <ThingsBoard.h>
 #define TOKEN "EBII_ACCESS_TOKEN"
-#define thingsboardServer "thingsboard.cloud"
+
+#define GPIO23 2 //relay Pin 
+//#define GPIO2 2
+
+#define GPIO23_PIN 14
+//#define GPIO2_PIN 5
+
+char thingsboardServer[] = "thingsboard.cloud";
+
 WiFiClient wifiClient;
+
+PubSubClient client(wifiClient);
+
+int status = WL_IDLE_STATUS;
 
 ThingsBoard tb(wifiClient);
 
-int status = WL_IDLE_STATUS;
 unsigned long lastSend;
+
+// We assume that all GPIOs are LOW
+boolean gpioState[] = {false, false};
 
 void pzemRead(){
 
@@ -133,11 +111,11 @@ void powerSystem(int relayMode){
    
   if(relayMode == 0){
     // Turn the relay switch ON 
-    digitalWrite(relayPin, LOW);// set relay pin to low 
+    digitalWrite(GPIO23, LOW);// set relay pin to low 
     Serial.println("Relay ON ");
   }else if(relayMode == 1){
     // Turn the relay switch OFF 
-    digitalWrite(relayPin, HIGH);// set relay pin to HIGH
+    digitalWrite(GPIO23, HIGH);// set relay pin to HIGH
     Serial.println("Relay OFF ");
   }
 
@@ -177,12 +155,158 @@ void getAndSendData(){
 
 }
 
+void setup() {
+  Serial.begin(115200);
+  // Set output mode for all GPIO pins
+  pinMode(GPIO23, OUTPUT);
+//  pinMode(GPIO2, OUTPUT);
+  delay(10);
+  InitWiFi();
+  client.setServer( thingsboardServer, 1883 );
+  client.setCallback(on_message);
+
+  lastSend = 0;
+}
+
+void loop() {
+  if ( !client.connected()  ) {
+    reconnect();
+  }
+
+  if ( !tb.connected() ) {
+    reconnect();
+  }
+
+  if ( millis() - lastSend > 1000 ) { // Update and send only after 1 seconds
+    getAndSendData();
+//    tb.loop();
+    lastSend = millis();
+  }
+
+  
+  client.loop();
+
+  pzemMonitor();
+}
+
+// The callback for when a PUBLISH message is received from the server.
+void on_message(const char* topic, byte* payload, unsigned int length) {
+
+  Serial.println("On message");
+
+  char json[length + 1];
+  strncpy (json, (char*)payload, length);
+  json[length] = '\0';
+
+  Serial.print("Topic: ");
+  Serial.println(topic);
+  Serial.print("Message: ");
+  Serial.println(json);
+
+  // Decode JSON request
+  StaticJsonDocument<200> jsonBuffer;
+  DeserializationError data = deserializeJson(jsonBuffer, (char*)json);
+
+  if (data)
+  {
+    Serial.println("parseObject() failed");
+    return;
+  }
+
+  // Check request method
+  String methodName = String((const char*)jsonBuffer["method"]);
+
+  if (methodName.equals("getGpioStatus")) {
+    // Reply with GPIO status
+    String responseTopic = String(topic);
+    responseTopic.replace("request", "response");
+    client.publish(responseTopic.c_str(), get_gpio_status().c_str());
+  } else if (methodName.equals("setGpioStatus")) {
+    // Update GPIO status and reply
+    set_gpio_status(jsonBuffer["params"]["pin"], jsonBuffer["params"]["enabled"]);
+    String responseTopic = String(topic);
+    responseTopic.replace("request", "response");
+    client.publish(responseTopic.c_str(), get_gpio_status().c_str());
+    client.publish("v1/devices/me/attributes", get_gpio_status().c_str());
+  }
+}
+
+String get_gpio_status() {
+  // Prepare gpios JSON payload string
+  StaticJsonDocument<200> jsonBuffer;
+  JsonObject data = jsonBuffer.to<JsonObject>();
+  data[String(GPIO23_PIN)] = gpioState[0] ? true : false;
+//  data[String(GPIO2_PIN)] = gpioState[1] ? true : false;
+  char payload[256];
+  serializeJson(jsonBuffer, payload);
+  String strPayload = String(payload);
+  Serial.print("Get gpio status: ");
+  Serial.println(strPayload);
+  return strPayload;
+}
+
+void set_gpio_status(int pin, boolean enabled) {
+  if (pin == GPIO23_PIN) {
+    // Output GPIOs state
+    digitalWrite(GPIO23, enabled ? HIGH : LOW);
+    // Update GPIOs state
+    gpioState[0] = enabled;
+  } 
+//  else if (pin == GPIO2_PIN) {
+//    // Output GPIOs state
+//    digitalWrite(GPIO2, enabled ? HIGH : LOW);
+//    // Update GPIOs state
+//    gpioState[1] = enabled;
+//  }
+}
+
+void InitWiFi() {
+  Serial.println("Connecting to AP ...");
+  // attempt to connect to WiFi network
+
+  WiFi.begin(WIFI_AP, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("Connected to AP");
+}
+
+
 void reconnect() {
   // Loop until we're reconnected
+  while (!client.connected()) {
+    status = WiFi.status();
+    if ( status != WL_CONNECTED) {
+      WiFi.begin(WIFI_AP, WIFI_PASSWORD);
+      while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+      }
+      Serial.println("Connected to AP");
+    }
+    Serial.print("Connecting to ThingsBoard node ...");
+    // Attempt to connect (clientId, username, password)
+    if ( client.connect("ESP8266 Device", TOKEN, NULL) ) {
+      Serial.println( "[DONE]" );
+      // Subscribing to receive RPC requests
+      client.subscribe("v1/devices/me/rpc/request/+");
+      // Sending current GPIO status
+      Serial.println("Sending current GPIO status ...");
+      client.publish("v1/devices/me/attributes", get_gpio_status().c_str());
+    } else {
+      Serial.print( "[FAILED] [ rc = " );
+      Serial.print( client.state() );
+      Serial.println( " : retrying in 5 seconds]" );
+      // Wait 5 seconds before retrying
+      delay( 5000 );
+    }
+  }
+
   while (!tb.connected()) {
     status = WiFi.status();
     if ( status != WL_CONNECTED) {
-      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+      WiFi.begin(WIFI_AP, WIFI_PASSWORD);
       while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print(".");
@@ -192,52 +316,17 @@ void reconnect() {
     Serial.print("Connecting to ThingsBoard node ...");
     if ( tb.connect(thingsboardServer, TOKEN) ) {
       Serial.println( "[DONE]" );
+      // Subscribing to receive RPC requests
+      client.subscribe("v1/devices/me/rpc/request/+");
+      // Sending current GPIO status
+      Serial.println("Sending current GPIO status ...");
+      client.publish("v1/devices/me/attributes", get_gpio_status().c_str());
     } else {
       Serial.print( "[FAILED]" );
+      Serial.print( client.state() );
       Serial.println( " : retrying in 5 seconds]" );
       // Wait 5 seconds before retrying
       delay( 5000 );
     }
   }
-}
-
-void setup() {
-  Serial.begin(9600);
-  WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
-  Serial.print("Connecting to Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    Serial.print(".");
-    delay(300);
-  }
-  Serial.println();
-  Serial.print("Connected with IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.println();
-
-  lastSend = 0;
-  
-  pinMode(relayPin, OUTPUT);
-
-}
-
-void loop() {
-
-  if ( !tb.connected() ) {
-    reconnect();
-  }
-
-  if ( millis() - lastSend > 1000 ) { // Update and send only after 1 seconds
-    getAndSendData();
-    lastSend = millis();
-  }
-
-  tb.loop();
-  
-  // memantau sensor PZEM
-  pzemMonitor();
-
-  
-  
-
 }
